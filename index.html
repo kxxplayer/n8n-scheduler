@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select a New Meeting Time</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>Alternative Times Proposed</h1>
+        </div>
+        
+        <div id="loading-state">
+            <p>Loading available time slots...</p>
+            <div class="spinner"></div>
+        </div>
+
+        <div id="slots-container" class="hidden">
+            </div>
+
+        <div id="confirmation-message" class="hidden">
+            <h2>Thank You!</h2>
+            <p>Your meeting has been successfully rescheduled. A calendar invitation has been sent.</p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
