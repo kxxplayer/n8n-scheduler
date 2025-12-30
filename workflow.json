@@ -1,0 +1,646 @@
+{
+  "name": "Bolna AI Voice Calling - NMIMS",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bolna-call-complete",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-bolna",
+      "name": "Bolna Call Complete",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract data from Bolna webhook\nconst body = $input.first().json.body || $input.first().json;\n\nconst callId = body.id || body.call_id || '';\nconst agentId = body.agent_id || '';\nconst status = body.status || '';\nconst duration = body.conversation_duration || body.duration || 0;\nconst transcript = body.transcript || '';\nconst summary = body.summary || '';\n\nconst telephonyData = body.telephony_data || {};\nconst recordingUrl = telephonyData.recording_url || body.recording_url || '';\nconst recipientPhone = body.user_number || telephonyData.to_number || '';\nconst fromPhone = body.agent_number || telephonyData.from_number || '';\n\nconst extraction = body.extracted_data || body.extraction || {};\nconst userName = extraction.user_name || '';\nconst isVerified = extraction.is_verified || 'unknown';\nconst isInterested = extraction.is_interested || 'unknown';\nconst qualification = extraction.qualification || '';\n\nlet percentage = extraction.percentage;\nif (percentage === 'NA' || percentage === 'na' || percentage === '' || percentage === undefined || percentage === null) {\n  percentage = null;\n} else {\n  percentage = parseFloat(percentage) || null;\n}\n\nconst isEligible = extraction.is_eligible || 'unknown';\nconst languagePreference = extraction.language_preference || 'english';\nconst callbackRequested = extraction.callback_requested || 'no';\nconst rejectionReason = extraction.rejection_reason || 'NA';\n\n// Ignore intermediate statuses like 'initiated' - only process final call outcomes\nconst isFinalStatus = status === 'completed' || status === 'call-disconnected' || status === 'no-answer' || status === 'busy' || status === 'failed';\n\n// Determine if call was answered - both 'completed' and 'call-disconnected' with duration > 0 are answered calls\nconst isAnswered = (status === 'completed' || status === 'call-disconnected') && duration > 0;\nconst isNoAnswer = status === 'no-answer' || status === 'busy' || status === 'failed' || ((status === 'completed' || status === 'call-disconnected') && duration === 0);\n\nreturn [{\n  json: {\n    call_id: callId,\n    agent_id: agentId,\n    status: status,\n    duration: duration,\n    transcript: transcript,\n    summary: summary,\n    recording_url: recordingUrl,\n    recipient_phone: recipientPhone,\n    from_phone: fromPhone,\n    user_name: userName,\n    is_verified: isVerified,\n    is_interested: isInterested,\n    qualification: qualification,\n    percentage: percentage,\n    is_eligible: isEligible,\n    language_preference: languagePreference,\n    callback_requested: callbackRequested,\n    rejection_reason: rejectionReason,\n    is_final_status: isFinalStatus,\n    is_answered: isAnswered,\n    is_no_answer: isNoAnswer\n  }\n}];"
+      },
+      "id": "extract-data",
+      "name": "Extract Call Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-final",
+              "leftValue": "={{ $json.is_final_status }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "check-final-status",
+      "name": "Is Final Status?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [448, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-answered",
+              "leftValue": "={{ $json.is_answered }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "check-call-outcome",
+      "name": "Check Call Outcome",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [672, -96]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE call_queue SET status = 'completed', call_id = '{{ $json.call_id }}', called_at = NOW() WHERE phone_number = '{{ $json.recipient_phone }}' AND status = 'calling' RETURNING name;"
+      },
+      "id": "update-queue",
+      "name": "Update Call Queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [896, -208],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const extractedData = $('Extract Call Data').first().json;\nconst queueResult = $('Update Call Queue').first().json;\n\nlet finalName = extractedData.user_name;\nif (!finalName || finalName === '' || finalName === 'NA' || finalName === 'na') {\n  finalName = queueResult.name || '';\n}\n\nreturn [{\n  json: {\n    ...extractedData,\n    user_name: finalName\n  }\n}];"
+      },
+      "id": "merge-name",
+      "name": "Merge Name from Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, -208]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO leads (phone, name, call_id, status, duration, transcript, summary, recording_url, is_verified, is_interested, qualification, percentage, is_eligible, language_preference, callback_requested, rejection_reason, created_at, updated_at) VALUES ('{{ $json.recipient_phone }}', '{{ $json.user_name.replace(/'/g, \"''\") }}', '{{ $json.call_id }}', '{{ $json.status }}', {{ $json.duration || 0 }}, '{{ $json.transcript.replace(/'/g, \"''\") }}', '{{ $json.summary.replace(/'/g, \"''\") }}', '{{ $json.recording_url }}', '{{ $json.is_verified }}', '{{ $json.is_interested }}', '{{ $json.qualification.replace(/'/g, \"''\") }}', {{ $json.percentage === null ? 'NULL' : $json.percentage }}, '{{ $json.is_eligible }}', '{{ $json.language_preference }}', '{{ $json.callback_requested }}', '{{ $json.rejection_reason.replace(/'/g, \"''\") }}', NOW(), NOW()) ON CONFLICT (call_id) DO UPDATE SET status = EXCLUDED.status, duration = EXCLUDED.duration, transcript = EXCLUDED.transcript, summary = EXCLUDED.summary, recording_url = EXCLUDED.recording_url, is_verified = EXCLUDED.is_verified, is_interested = EXCLUDED.is_interested, qualification = EXCLUDED.qualification, percentage = EXCLUDED.percentage, is_eligible = EXCLUDED.is_eligible, language_preference = EXCLUDED.language_preference, callback_requested = EXCLUDED.callback_requested, rejection_reason = EXCLUDED.rejection_reason, updated_at = NOW() RETURNING *;"
+      },
+      "id": "save-lead-db",
+      "name": "Save Lead to DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1344, -208],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst istOffset = 5.5 * 60 * 60 * 1000;\nconst istTime = new Date(now.getTime() + istOffset);\nconst hour = istTime.getUTCHours();\n\nconst isWithinWindow = hour >= 12 && hour < 16;\n\nreturn [{\n  json: {\n    current_hour_ist: hour,\n    is_within_window: isWithinWindow,\n    message: isWithinWindow ? 'Within calling hours (12pm-4pm IST)' : 'Outside calling hours'\n  }\n}];"
+      },
+      "id": "check-time-window",
+      "name": "Check Time Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1568, -208]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-window",
+              "leftValue": "={{ $json.is_within_window }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "is-within-window",
+      "name": "Is Within Window?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1792, -208]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as active_count FROM call_queue WHERE status = 'calling' AND called_at > NOW() - INTERVAL '30 minutes';"
+      },
+      "id": "count-active-calls",
+      "name": "Count Active Calls",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2016, -208],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const activeCount = parseInt($input.first().json.active_count) || 0;\nconst maxConcurrent = 10; \nconst slotsAvailable = maxConcurrent - activeCount;\n\nreturn [{\n  json: {\n    active_count: activeCount,\n    max_concurrent: maxConcurrent,\n    slots_available: slotsAvailable,\n    can_make_call: slotsAvailable > 0\n  }\n}];"
+      },
+      "id": "check-concurrency",
+      "name": "Check Concurrency Limit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, -208]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-slots",
+              "leftValue": "={{ $json.can_make_call }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "has-slots",
+      "name": "Has Available Slots?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2464, -208]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM call_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED;"
+      },
+      "id": "get-next-lead",
+      "name": "Get Next Pending Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2688, -208],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-lead",
+              "leftValue": "={{ $json.id }}",
+              "operator": {
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "has-next-lead",
+      "name": "Has Next Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2912, -208]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE call_queue SET status = 'calling', called_at = NOW() WHERE id = {{ $json.id }};"
+      },
+      "id": "mark-calling",
+      "name": "Mark as Calling",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [3136, -208],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.bolna.ai/call",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "agent_id",
+              "value": "783882a7-99b7-494a-9ea0-b2209d5942f9"
+            },
+            {
+              "name": "recipient_phone_number",
+              "value": "={{ $json.phone_number }}"
+            },
+            {
+              "name": "user_name",
+              "value": "={{ $json.name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "call-next-lead",
+      "name": "Call Next Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3360, -208],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1cbacbaa60e72a3b",
+          "name": "Bolna API Key (New)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=WITH updated AS (\n  UPDATE call_queue \n  SET status = 'no-answer', call_id = '{{ $json.call_id }}', called_at = NOW() \n  WHERE phone_number = '{{ $json.recipient_phone }}' AND status = 'calling' \n  RETURNING name, phone_number\n)\nINSERT INTO pending_callbacks (name, phone_number, original_call_id, failure_reason, status, created_at) \nSELECT name, phone_number, '{{ $json.call_id }}', 'no-answer', 'pending', NOW() FROM updated \nWHERE EXISTS (SELECT 1 FROM updated)\nRETURNING *;"
+      },
+      "id": "handle-no-answer",
+      "name": "Handle No Answer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [896, 64],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload-leads",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-csv",
+      "name": "CSV Upload Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\n// Assuming CSV data comes in binary property 'data' or parsed JSON\nconst csvData = items[0].json.data || items[0].json;\n\n// If array of objects (parsed CSV)\nif (Array.isArray(csvData)) {\n  return csvData.map(row => ({\n    json: {\n      name: row.Name || row.name,\n      phone_number: row.Phone || row.phone || row.phone_number,\n      status: 'pending',\n      created_at: new Date().toISOString()\n    }\n  }));\n}\n\nreturn [{ json: { error: 'Invalid CSV format' } }];"
+      },
+      "id": "parse-csv",
+      "name": "Parse CSV Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO call_queue (name, phone_number, status, created_at) VALUES ('{{ $json.name }}', '{{ $json.phone_number }}', 'pending', NOW()) ON CONFLICT (phone_number) DO NOTHING;"
+      },
+      "id": "insert-queue",
+      "name": "Insert Leads to Queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [448, 400],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Scheduled Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, -600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst istOffset = 5.5 * 60 * 60 * 1000;\nconst istTime = new Date(now.getTime() + istOffset);\nconst hour = istTime.getUTCHours();\n\nconst isWithinWindow = hour >= 12 && hour < 16;\n\nreturn [{\n  json: {\n    current_hour_ist: hour,\n    is_within_window: isWithinWindow,\n    message: isWithinWindow ? 'Within calling hours (12pm-4pm IST)' : 'Outside calling hours'\n  }\n}];"
+      },
+      "id": "cron-check-time",
+      "name": "Cron Check Time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, -600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-cron-window",
+              "leftValue": "={{ $json.is_within_window }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "cron-is-within-window",
+      "name": "Cron Is Within Window?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [448, -600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as active_count FROM call_queue WHERE status = 'calling' AND called_at > NOW() - INTERVAL '30 minutes';"
+      },
+      "id": "cron-count-active",
+      "name": "Cron Count Active Calls",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [672, -600],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const activeCount = parseInt($input.first().json.active_count) || 0;\nconst maxConcurrent = 10;\nconst slotsAvailable = maxConcurrent - activeCount;\n\nreturn [{\n  json: {\n    active_count: activeCount,\n    max_concurrent: maxConcurrent,\n    slots_available: slotsAvailable,\n    can_make_calls: slotsAvailable > 0\n  }\n}];"
+      },
+      "id": "cron-check-concurrency",
+      "name": "Cron Check Concurrency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [896, -600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-cron-slots",
+              "leftValue": "={{ $json.can_make_calls }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ]
+        }
+      },
+      "id": "cron-has-slots",
+      "name": "Cron Has Slots?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, -600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM call_queue WHERE status = 'pending' ORDER BY id ASC LIMIT {{ $json.slots_available }} FOR UPDATE SKIP LOCKED;"
+      },
+      "id": "cron-get-leads",
+      "name": "Cron Get Pending Leads",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1344, -600],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-has-leads",
+              "leftValue": "={{ $json.id }}",
+              "operator": {
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "cron-has-leads",
+      "name": "Cron Has Leads?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1568, -600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE call_queue SET status = 'calling', called_at = NOW() WHERE id = {{ $json.id }};"
+      },
+      "id": "cron-mark-calling",
+      "name": "Cron Mark as Calling",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1792, -600],
+      "credentials": {
+        "postgres": {
+          "id": "98sDeI6GBPXj9fbF",
+          "name": "Postgres account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.bolna.ai/call",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "agent_id",
+              "value": "783882a7-99b7-494a-9ea0-b2209d5942f9"
+            },
+            {
+              "name": "recipient_phone_number",
+              "value": "={{ $json.phone_number }}"
+            },
+            {
+              "name": "user_name",
+              "value": "={{ $json.name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cron-call-lead",
+      "name": "Cron Call Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2016, -600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1cbacbaa60e72a3b",
+          "name": "Bolna API Key (New)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Bolna Call Complete": {
+      "main": [[{"node": "Extract Call Data", "type": "main", "index": 0}]]
+    },
+    "Extract Call Data": {
+      "main": [[{"node": "Is Final Status?", "type": "main", "index": 0}]]
+    },
+    "Is Final Status?": {
+      "main": [
+        [{"node": "Check Call Outcome", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Check Call Outcome": {
+      "main": [
+        [{"node": "Update Call Queue", "type": "main", "index": 0}],
+        [{"node": "Handle No Answer", "type": "main", "index": 0}]
+      ]
+    },
+    "Update Call Queue": {
+      "main": [[{"node": "Merge Name from Queue", "type": "main", "index": 0}]]
+    },
+    "Merge Name from Queue": {
+      "main": [[{"node": "Save Lead to DB", "type": "main", "index": 0}]]
+    },
+    "Save Lead to DB": {
+      "main": [[{"node": "Check Time Window", "type": "main", "index": 0}]]
+    },
+    "Check Time Window": {
+      "main": [[{"node": "Is Within Window?", "type": "main", "index": 0}]]
+    },
+    "Is Within Window?": {
+      "main": [
+        [{"node": "Count Active Calls", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Count Active Calls": {
+      "main": [[{"node": "Check Concurrency Limit", "type": "main", "index": 0}]]
+    },
+    "Check Concurrency Limit": {
+      "main": [[{"node": "Has Available Slots?", "type": "main", "index": 0}]]
+    },
+    "Has Available Slots?": {
+      "main": [
+        [{"node": "Get Next Pending Lead", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Get Next Pending Lead": {
+      "main": [[{"node": "Has Next Lead?", "type": "main", "index": 0}]]
+    },
+    "Has Next Lead?": {
+      "main": [
+        [{"node": "Mark as Calling", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Mark as Calling": {
+      "main": [[{"node": "Call Next Lead", "type": "main", "index": 0}]]
+    },
+    "CSV Upload Webhook": {
+      "main": [[{"node": "Parse CSV Data", "type": "main", "index": 0}]]
+    },
+    "Parse CSV Data": {
+      "main": [[{"node": "Insert Leads to Queue", "type": "main", "index": 0}]]
+    },
+    "Scheduled Trigger": {
+      "main": [[{"node": "Cron Check Time", "type": "main", "index": 0}]]
+    },
+    "Cron Check Time": {
+      "main": [[{"node": "Cron Is Within Window?", "type": "main", "index": 0}]]
+    },
+    "Cron Is Within Window?": {
+      "main": [
+        [{"node": "Cron Count Active Calls", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Cron Count Active Calls": {
+      "main": [[{"node": "Cron Check Concurrency", "type": "main", "index": 0}]]
+    },
+    "Cron Check Concurrency": {
+      "main": [[{"node": "Cron Has Slots?", "type": "main", "index": 0}]]
+    },
+    "Cron Has Slots?": {
+      "main": [
+        [{"node": "Cron Get Pending Leads", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Cron Get Pending Leads": {
+      "main": [[{"node": "Cron Has Leads?", "type": "main", "index": 0}]]
+    },
+    "Cron Has Leads?": {
+      "main": [
+        [{"node": "Cron Mark as Calling", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Cron Mark as Calling": {
+      "main": [[{"node": "Cron Call Lead", "type": "main", "index": 0}]]
+    }
+  }
+}
