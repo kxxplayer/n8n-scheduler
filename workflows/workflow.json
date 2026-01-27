@@ -352,7 +352,7 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 2
+              "minutesInterval": 5
             }
           ]
         }
@@ -563,9 +563,6 @@
     },
     "Merge Name from Queue": {
       "main": [[{"node": "Save Lead to DB", "type": "main", "index": 0}]]
-    },
-    "Save Lead to DB": {
-      "main": [[{"node": "Check Time Window", "type": "main", "index": 0}]]
     },
     "Check Time Window": {
       "main": [[{"node": "Is Within Window?", "type": "main", "index": 0}]]

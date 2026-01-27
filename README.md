@@ -1,78 +1,124 @@
-# AI Voice Calling & Lead Qualification System
+# 🤖 AI Voice Calling & Lead Qualification System
 
-A resilient, autonomous outbound calling agent powered by **n8n**, **Bolna AI**, and **PostgreSQL**. Designed to handle high-throughput lead qualification campaigns with concurrency management, state persistence, and automated retries.
+![Project Status](https://img.shields.io/badge/status-active-success)
+![Technologies](https://img.shields.io/badge/tech-n8n%2C%20Bolna%20AI%2C%20PostgreSQL-blueviolet)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-## 🚀 Features
+A resilient, autonomous outbound calling system designed to handle high-throughput lead qualification campaigns. This project uses **n8n** for workflow orchestration, a **Voice AI Platform** (like Bolna, Retell, or Tabbly) for conversational AI, and **PostgreSQL** for resilient state management.
 
--   **High-Concurrency Orchestration:** Manages up to **10 concurrent calls** using cron-based batch scheduling and dynamic throttling.
--   **Resilient State Management:** PostgreSQL-backed system to track call lifecycles (`pending` → `calling` → `completed` / `no-answer`).
--   **Automated Retries:** Automatically queues unanswered calls for retry while preventing duplicates.
--   **Webhook Filtering:** Intelligent parsing of Bolna webhooks to filter intermediate statuses and reduce execution noise.
--   **Bulk Lead Ingestion:** HTTP endpoint for uploading CSV lead lists directly into the queue.
--   **Analytics Ready:** Captures detailed call metrics (duration, transcript, sentiment, qualification status) for reporting.
+This repository is a production-ready template for building and deploying sophisticated voice agents for sales, support, and customer engagement.
 
-## 🛠️ Architecture
+## ✨ Key Features
 
-The system consists of three main components:
+-   **High-Concurrency Orchestration:** Manages multiple concurrent calls using cron-based batch scheduling and dynamic throttling.
+-   **Resilient State Management:** PostgreSQL-backed system to track call lifecycles (`pending` → `calling` → `completed` / `failed`).
+-   **Automated Retries & Callbacks:** Intelligently queues unanswered or failed calls for retry while preventing duplicates.
+-   **Dynamic Agent Prompts:** Includes multiple, highly-optimized agent prompts for different personas and scenarios (e.g., `Raveena`, `Vikram`).
+-   **Advanced Hangup & Extraction Logic:** Sophisticated prompts to control call termination and extract structured data (e.g., eligibility, interest, CGPA).
+-   **Bulk Lead Ingestion:** HTTP endpoint for uploading CSV lead lists directly into the calling queue.
+-   **Analytics-Ready:** Captures detailed call metrics (duration, transcript, sentiment, qualification status) for reporting and dashboards.
 
-1.  **n8n Workflow:** Orchestrates the logic, handles webhooks, and manages the database state.
-2.  **Bolna AI:** Provides the conversational voice AI agent.
-3.  **PostgreSQL:** Persists lead data, call queue status, and campaign analytics.
+## 🛠️ Architecture Overview
 
-### Workflow Logic
-1.  **Cron Trigger (Every 2 mins):** Checks for available concurrency slots and time window (12 PM - 4 PM IST).
-2.  **Batch Processing:** Fetches pending leads from `call_queue` and initiates calls via Bolna API.
-3.  **Webhook Handling:** Receives call completion events, parses extracted data (name, intent, qualification), and updates the database.
-4.  **No-Answer Handling:** If a call fails or isn't answered, it's marked for retry in `pending_callbacks`.
+The system is built on a robust, decoupled architecture:
 
-## 📦 Setup & Installation
+1.  **Workflow Orchestrator (n8n):** The brain of the operation. It manages the logic, handles webhooks, and communicates with the database and AI platform.
+2.  **Voice AI Platform:** The voice of the operation. Handles the real-time conversation with the user.
+3.  **Database (PostgreSQL):** The memory of the operation. Persists lead data, call queue status, and campaign analytics.
 
-### 1. Database Setup
-Run the included SQL scripts to set up your PostgreSQL schema:
-
-```sql
--- Create the necessary tables
-\i create_call_queue_table.sql
-
--- Add constraints
-\i add_unique_constraint.sql
+```mermaid
+graph TD
+    A[Lead Source - CSV/API] --> B{n8n Workflow};
+    B --> C[PostgreSQL Database];
+    C --> B;
+    B --> D[Voice AI Platform];
+    D --> E[User Phone Call];
+    E --> D;
+    D -- Webhook --> B;
 ```
 
-### 2. n8n Configuration
-1.  Import `workflow.json` into your n8n instance.
-2.  Set up your **PostgreSQL** credentials in n8n.
-3.  Set up your **Bolna AI** API key in n8n credentials.
-4.  Configure the `Scheduled Trigger` node to your desired frequency (default: 2 mins).
+## 📂 Project Structure
 
-### 3. Environment Variables
-Ensure your n8n instance has access to:
--   `POSTGRES_HOST`
--   `POSTGRES_USER`
--   `POSTGRES_PASSWORD`
--   `BOLNA_API_KEY`
--   `BOLNA_AGENT_ID`
+The repository is organized to be clean, scalable, and easy to navigate:
 
-## 📊 Database Schema
+```
+.env.example
+.gitignore
+README.md
+requirements.txt
 
--   `call_queue`: Manages the immediate calling list and current status.
--   `leads`: Stores historical data of all processed calls, including transcripts and recording URLs.
--   `pending_callbacks`: Queue for retrying failed or unanswered calls.
+/prompts
+  /agents
+    raveena_agent_prompt.md
+    vikram_agent_prompt.md
+  /logic
+    hangup_prompt.md
+    extraction_prompt.md
+
+/sql
+  create_call_queue.sql
+  create_leads_table.sql
+
+/workflows
+  main_orchestrator.json
+  lead_ingestion.json
+
+/utils
+  csv_parser.py
+```
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+-   An **n8n** instance (Cloud or self-hosted)
+-   A **PostgreSQL** database
+-   An account with a **Voice AI Platform** (e.g., Retell, Tabbly, Bland)
+-   Python 3.8+
+
+### 1. Database Setup
+
+Connect to your PostgreSQL instance and run the setup scripts:
+
+```bash
+psql -U your_user -d your_db -f sql/create_leads_table.sql
+psql -U your_user -d your_db -f sql/create_call_queue.sql
+```
+
+### 2. Environment Variables
+
+Create a `.env` file from the `.env.example` and fill in your credentials:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+### 3. n8n Configuration
+
+1.  Import the workflows from the `/workflows` directory into your n8n instance.
+2.  Configure your **PostgreSQL** and **HTTP Request** nodes with the credentials from your `.env` file.
+3.  Activate the workflows.
 
 ## 📝 Usage
 
 ### Uploading Leads
-Send a POST request to the n8n webhook endpoint with your CSV data:
+
+Send a POST request to the `lead_ingestion` workflow's webhook endpoint with your CSV data.
+
 ```bash
 curl -X POST https://your-n8n-instance/webhook/upload-leads \
-  -H "Content-Type: application/json" \
-  -d '{"data": [{"name": "John Doe", "phone": "+1234567890"}]}'
+  -F "file=@/path/to/your/leads.csv"
 ```
 
-### Monitoring
-Check the `call_queue` table for real-time status:
+### Monitoring the Campaign
+
+Check the `call_queue` table for real-time status updates:
+
 ```sql
 SELECT status, COUNT(*) FROM call_queue GROUP BY status;
 ```
 
 ## 📄 License
-This project is licensed under the MIT License.
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
